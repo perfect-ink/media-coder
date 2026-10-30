@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: ConverterModel
@@ -132,6 +133,11 @@ struct ContentView: View {
         }
             .padding(28)
         }.background(Color(nsColor: .windowBackgroundColor)).tint(accent)
+        .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            model.add(urls)
+            return !urls.isEmpty
+        } isTargeted: { isTargeted = $0 }
         .alert("Media Coder", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK") { model.notice = nil }
         } message: { Text(model.notice ?? "") }
@@ -164,7 +170,7 @@ struct ContentView: View {
     private var dropArea: some View {
         VStack(spacing: 8) {
             FilmIconArtwork(size: 42)
-            Text("Drop videos here").font(.system(size: 14, weight: .semibold))
+            Text("Drop videos anywhere").font(.system(size: 14, weight: .semibold))
             Text("MPG, AVI, MOV, MP4, and more").font(.caption2).foregroundStyle(.secondary)
             Button("Browse files…") { model.chooseFiles() }.buttonStyle(.link).font(.caption)
         }
@@ -189,6 +195,7 @@ struct ContentView: View {
                     ScrollView {
                         LazyVStack(spacing: 6) {
                             ForEach(model.jobs) { job in
+                                QueueDropRow(model: model, jobID: job.id, accent: accent) {
                                 Button { model.selectedJobID = job.id } label: {
                                     HStack(spacing: 9) {
                                         FilmIconArtwork(size: 30)
@@ -204,7 +211,14 @@ struct ContentView: View {
                                     }.padding(11).frame(maxWidth: .infinity, alignment: .leading)
                                         .background(model.selectedJobID == job.id ? accent.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
                                         .contentShape(Rectangle())
-                                }.buttonStyle(.plain).id(job.id).help(job.source.path)
+                                }.buttonStyle(.plain).help(job.source.path)
+                                    .draggable(job.source)
+                                }.id(job.id)
+                            }
+                            QueueDropRow(model: model, jobID: nil, accent: accent) {
+                                Text("Drop here to add to the end")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, minHeight: 40)
                             }
                         }.padding(.horizontal, 8)
                     }
@@ -218,7 +232,7 @@ struct ContentView: View {
             }
         }.frame(width: 250).background(Color(nsColor: .underPageBackgroundColor))
         .dropDestination(for: URL.self) { urls, _ in
-            model.add(urls)
+            model.place(urls, before: nil)
             return !urls.isEmpty
         } isTargeted: { isTargeted = $0 }
     }
@@ -297,5 +311,68 @@ struct ContentView: View {
                 Text("Add a few videos to get started.").font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Row halves act as before/after insertion targets for both Finder and queue drags.
+private struct QueueDropRow<Content: View>: View {
+    @ObservedObject var model: ConverterModel
+    let jobID: UUID?
+    let accent: Color
+    @ViewBuilder let content: () -> Content
+    @State private var height: CGFloat = 60
+    @State private var targeted = false
+    @State private var insertAfter = false
+
+    var body: some View {
+        content()
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .background(GeometryReader { geometry in
+                Color.clear.onChange(of: geometry.size.height, initial: true) { _, value in height = value }
+            })
+            .overlay(alignment: insertAfter ? .bottom : .top) {
+                if targeted { Rectangle().fill(accent).frame(height: 3).allowsHitTesting(false) }
+            }
+            .onDrop(of: [.fileURL], delegate: QueueInsertionDrop(
+                model: model, jobID: jobID, height: height,
+                targeted: $targeted, insertAfter: $insertAfter))
+    }
+}
+
+private struct QueueInsertionDrop: DropDelegate {
+    let model: ConverterModel
+    let jobID: UUID?
+    let height: CGFloat
+    @Binding var targeted: Bool
+    @Binding var insertAfter: Bool
+
+    func dropEntered(info: DropInfo) { targeted = true; insertAfter = jobID != nil && info.location.y > height / 2 }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        insertAfter = jobID != nil && info.location.y > height / 2
+        return DropProposal(operation: .copy)
+    }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        let after = jobID != nil && info.location.y > height / 2
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        Task { @MainActor in
+            let destination: UUID?
+            if after, let index = model.jobs.firstIndex(where: { $0.id == jobID }) {
+                destination = model.jobs.dropFirst(index + 1).first?.id
+            } else { destination = jobID }
+            var urls: [URL] = []
+            // Preserve the order of a multi-file drop despite asynchronous provider loads.
+            for provider in providers {
+                let url: URL? = await withCheckedContinuation { continuation in
+                    provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+                }
+                if let url { urls.append(url) }
+            }
+            model.place(urls, before: destination)
+        }
+        return true
     }
 }

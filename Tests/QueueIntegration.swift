@@ -21,13 +21,32 @@ struct QueueIntegration {
         model.ffmpegURL = ffmpeg
         model.capabilities = try await CodecCapabilities.inspect(ffmpeg)
         while model.isInspecting { try await Task.sleep(nanoseconds: 10_000_000) }
-        model.hardwareAcceleration = true
+        assert(model.hardwareAcceleration, "Hardware acceleration should default to enabled")
         assert(model.usesHardwareAcceleration == model.canUseHardwareAcceleration)
         model.format = .webm
         assert(!model.usesHardwareAcceleration)
         model.format = .mp4
         model.hardwareAcceleration = false
         model.add([source, second])
+        let firstID = model.jobs[0].id
+        let secondID = model.jobs[1].id
+        model.place([second], before: firstID)
+        assert(model.jobs.map(\.id) == [secondID, firstID])
+        assert(model.selectedJobID == firstID)
+        model.place([second], before: nil)
+        assert(model.jobs.map(\.id) == [firstID, secondID])
+        model.place([source], before: firstID)
+        assert(model.jobs.map(\.id) == [firstID, secondID])
+        model.add([source])
+        assert(model.jobs.count == 2)
+        let third = folder.appendingPathComponent("third.avi")
+        let fourth = folder.appendingPathComponent("fourth.avi")
+        try FileManager.default.copyItem(at: source, to: third)
+        try FileManager.default.copyItem(at: source, to: fourth)
+        model.place([third, fourth, third], before: secondID)
+        assert(model.jobs.map(\.source) == [source, third, fourth, second])
+        model.remove(model.jobs[1].id)
+        model.remove(model.jobs[1].id)
         for size in VideoSize.allCases {
             let output = model.uniqueOutput(source: source, folder: folder, format: .mp4, size: size)
             let suffix = size == .custom ? "1920x1080" : size.filenameSuffix
@@ -55,7 +74,14 @@ struct QueueIntegration {
         assert(model.uniqueOutput(source: source, folder: folder, format: .mp4, size: .custom).lastPathComponent == "first-converted-641x359.mp4")
         model.size = .hd
         model.start()
+        while model.jobs.first(where: { $0.id == firstID })?.status == .waiting {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        model.place([source], before: nil)
         while model.isConverting { try await Task.sleep(nanoseconds: 10_000_000) }
+        assert(model.jobs.first(where: { $0.id == firstID })?.status == .done)
+        assert(model.jobs.first(where: { $0.id == secondID })?.status == .waiting)
+        model.place([source], before: secondID)
         assert(model.jobs[0].status == .done, "First should complete")
         assert(model.jobs[1].status == .waiting, "Next must wait for user action")
         assert(model.jobs[0].output?.lastPathComponent == "first-converted-720p.mp4")

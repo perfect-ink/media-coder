@@ -33,7 +33,7 @@ final class ConverterModel: ObservableObject {
     @Published var format: OutputFormat = .mp4
     @Published var size: VideoSize = .original
     @Published var quality: VideoQuality = .balanced
-    @Published var hardwareAcceleration = false
+    @Published var hardwareAcceleration = true
     var canUseHardwareAcceleration: Bool {
         guard let encoder = format.hardwareEncoder else { return false }
         return capabilities?.encoders.contains(encoder) == true
@@ -180,20 +180,36 @@ final class ConverterModel: ObservableObject {
     }
 
     func add(_ urls: [URL]) {
+        place(urls, before: nil, movingExisting: false)
+    }
+
+    /// A stable destination ID keeps insertion correct after removing moved items.
+    func place(_ urls: [URL], before destinationID: UUID?, movingExisting: Bool = true) {
         var rejected = 0
+        var inserted: [VideoJob] = []
+        var seen = Set<URL>()
         for url in urls {
+            let canonical = url.standardizedFileURL
+            guard seen.insert(canonical).inserted else { continue }
+            if let existing = jobs.first(where: { $0.source.standardizedFileURL == canonical }) {
+                if movingExisting { inserted.append(existing) }
+                continue
+            }
             var directory: ObjCBool = false
             guard url.isFileURL,
                   FileManager.default.fileExists(atPath: url.path, isDirectory: &directory),
                   !directory.boolValue, FileManager.default.isReadableFile(atPath: url.path) else {
                 rejected += 1; continue
             }
-            let canonical = url.standardizedFileURL
-            if !jobs.contains(where: { $0.source.standardizedFileURL == canonical }) {
-                let job = VideoJob(source: canonical)
-                jobs.append(job)
-                if selectedJobID == nil { selectedJobID = job.id }
-            }
+            inserted.append(VideoJob(source: canonical))
+        }
+        if !inserted.isEmpty {
+            let movedIDs = Set(inserted.map(\.id))
+            let boundary = destinationID.flatMap { id in jobs.firstIndex { $0.id == id } } ?? jobs.count
+            let insertionIndex = jobs.prefix(boundary).filter { !movedIDs.contains($0.id) }.count
+            jobs.removeAll { movedIDs.contains($0.id) }
+            jobs.insert(contentsOf: inserted, at: insertionIndex)
+            if selectedJobID == nil { selectedJobID = inserted.first?.id }
         }
         if rejected > 0 { notice = "Skipped \(rejected) item(s). Drop readable video files, rather than folders." }
     }
@@ -268,12 +284,15 @@ final class ConverterModel: ObservableObject {
                             self.jobs[index].progress = progress
                         }
                     }
+                    guard let index = jobs.firstIndex(where: { $0.id == id }) else { continue }
                     jobs[index].status = .done
                     jobs[index].progress = 1
                     jobs[index].output = destination
                 } catch is CancellationError {
+                    guard let index = jobs.firstIndex(where: { $0.id == id }) else { continue }
                     jobs[index].status = .cancelled
                 } catch {
+                    guard let index = jobs.firstIndex(where: { $0.id == id }) else { continue }
                     jobs[index].status = .failed(error.localizedDescription)
                 }
             }
