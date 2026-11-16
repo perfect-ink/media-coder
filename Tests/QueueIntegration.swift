@@ -18,9 +18,24 @@ struct QueueIntegration {
         guard process.terminationStatus == 0 else { fatalError("Fixture failed") }
         try FileManager.default.copyItem(at: source, to: second)
         let model = ConverterModel()
-        model.ffmpegURL = ffmpeg
-        model.capabilities = try await CodecCapabilities.inspect(ffmpeg)
         while model.isInspecting { try await Task.sleep(nanoseconds: 10_000_000) }
+        assert(model.ffmpegURL == EngineLocation.discover())
+        let app = folder.appendingPathComponent("MissingEngine.app")
+        let contents = app.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info: [String: String] = ["CFBundleIdentifier": "test.missing-engine", "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
+        let bundle = Bundle(url: app)!
+        assert(EngineLocation.discover(in: bundle) == nil, "App bundles must not fall back to Homebrew")
+        let bundledCodecs: Set<String> = ["h264_videotoolbox", "hevc_videotoolbox", "aac"]
+        assert(OutputFormat.mp4.isSupported(by: bundledCodecs))
+        assert(OutputFormat.hevc.isSupported(by: bundledCodecs))
+        assert(!OutputFormat.mp4.isSupported(by: ["h264_videotoolbox"]))
+        assert(!OutputFormat.webm.isSupported(by: bundledCodecs))
+        let softwareAllowed = OutputFormat.mp4.arguments(encoders: bundledCodecs)
+        assert(softwareAllowed.contains("h264_videotoolbox") && !softwareAllowed.contains("libx264"))
+        assert(softwareAllowed[softwareAllowed.firstIndex(of: "-allow_sw")! + 1] == "1")
+        assert(softwareAllowed[softwareAllowed.firstIndex(of: "-require_sw")! + 1] == "1")
         assert(model.hardwareAcceleration, "Hardware acceleration should default to enabled")
         assert(model.usesHardwareAcceleration == model.canUseHardwareAcceleration)
         model.format = .webm

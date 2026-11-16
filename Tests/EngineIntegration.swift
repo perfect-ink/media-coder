@@ -80,18 +80,16 @@ struct EngineIntegration {
         let tiny = folder.appendingPathComponent("all-codecs.avi")
         _ = try command(ffmpeg, ["-f", "lavfi", "-i", "testsrc2=size=160x120:rate=25", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "0.3", "-c:v", "mpeg4", "-c:a", "pcm_s16le", tiny.path])
         var engines = [URL(fileURLWithPath: ffmpeg)]
-        if CommandLine.arguments.contains("--download-pack") {
-            let pack = try await CodecPack.install { _ in }
-            engines.append(pack)
-            print("PASS pack download, checksum, installation, and inspection")
+        if let path = ProcessInfo.processInfo.environment["BUNDLED_FFMPEG"] {
+            engines.append(URL(fileURLWithPath: path))
         }
         for executable in engines {
             let capabilities = try await CodecCapabilities.inspect(executable)
-            guard capabilities.decoders.contains("h264"), capabilities.encoders.contains("libx264") else { fatalError("Capability inspection failed") }
+            guard capabilities.decoders.contains("h264"), OutputFormat.mp4.isSupported(by: capabilities.encoders) else { fatalError("Capability inspection failed") }
             print("Engine: \(capabilities.decoders.count) decoders, \(capabilities.encoders.count) encoders")
             for format in OutputFormat.allCases where format.isSupported(by: capabilities.encoders) {
                 let output = folder.appendingPathComponent(UUID().uuidString).appendingPathExtension(format.fileExtension)
-                try await ConversionEngine().convert(executable: executable, source: tiny, destination: output, format: format, size: .original, encoders: capabilities.encoders) { _ in }
+                try await ConversionEngine().convert(executable: executable, source: tiny, destination: output, format: format, size: .original, hardwareAcceleration: executable.path != ffmpeg && format.hardwareEncoder != nil, encoders: capabilities.encoders) { _ in }
                 let streams = try command(probe, ["-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", output.path])
                 guard streams.contains("video") == !format.isAudioOnly, streams.contains("audio") else { fatalError("Missing streams for \(format)") }
                 let expectedAudio: [OutputFormat: String] = [.alac: "alac", .opus: "opus", .wavpack: "wavpack", .aiff: "pcm_s16be", .ac3: "ac3"]

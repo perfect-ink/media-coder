@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct VideoJob: Identifiable {
     let id = UUID()
     let source: URL
+    var access: FileAccess?
     var status: Status = .waiting
     var progress = 0.0
     var output: URL?
@@ -48,7 +49,8 @@ final class ConverterModel: ObservableObject {
         return (width, height)
     }
     var hasValidSize: Bool { format.isAudioOnly || size != .custom || customDimensions != nil }
-    @Published var outputFolder: URL?
+    private var outputAccess: FileAccess?
+    @Published var outputFolder: URL? { didSet { outputAccess = outputFolder.map(FileAccess.init) } }
     @Published var isConverting = false
     @Published var ffmpegURL: URL?
     @Published var notice: String?
@@ -57,47 +59,11 @@ final class ConverterModel: ObservableObject {
     @Published var capabilities: CodecCapabilities?
     @Published var capabilityError: String?
     @Published var isInspecting = false
-    @Published var isDownloadingPack = false
-    @Published var packProgress = 0.0
-    @Published var packError: String?
     private var inspectionTask: Task<Void, Never>?
-    private var downloadTask: Task<Void, Never>?
 
     var availableFormats: [OutputFormat] {
-        guard let capabilities else { return OutputFormat.allCases }
+        guard let capabilities else { return [] }
         return OutputFormat.allCases.filter { $0.isSupported(by: capabilities.encoders) }
-    }
-
-    func downloadPack() {
-        guard !isDownloadingPack, !isConverting else { return }
-        isDownloadingPack = true
-        packProgress = 0
-        packError = nil
-        downloadTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.isDownloadingPack = false; self.downloadTask = nil }
-            do {
-                let url = try await CodecPack.install { [weak self] value in
-                    Task { @MainActor in self?.packProgress = value }
-                }
-                self.useEngine(url)
-            } catch is CancellationError {
-                self.packError = "Download cancelled. Your existing engine is unchanged."
-            } catch {
-                if (error as NSError).code == NSURLErrorCancelled {
-                    self.packError = "Download cancelled. Your existing engine is unchanged."
-                } else { self.packError = error.localizedDescription }
-            }
-        }
-    }
-
-    func cancelPackDownload() { downloadTask?.cancel() }
-
-    func useEngine(_ url: URL) {
-        guard !isConverting else { return }
-        UserDefaults.standard.set(url.path, forKey: "ffmpegPath")
-        ffmpegURL = url
-        inspectEngine()
     }
 
     private func inspectEngine() {
@@ -129,30 +95,14 @@ final class ConverterModel: ObservableObject {
     var waitingCount: Int { jobs.filter { $0.status == .waiting }.count }
 
     func discoverFFmpeg() {
-        let saved = UserDefaults.standard.string(forKey: "ffmpegPath")
-        let candidates: [String?] = [saved, Bundle.main.url(forResource: "ffmpeg", withExtension: nil)?.path,
-                          "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", CodecPack.executable.path, "/usr/bin/ffmpeg"]
         let previous = ffmpegURL
-        ffmpegURL = candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+        ffmpegURL = EngineLocation.discover()
         if previous != ffmpegURL || (capabilities == nil && !isInspecting) { inspectEngine() }
-    }
-
-    func chooseFFmpeg() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose the FFmpeg executable"
-        panel.message = "Select an FFmpeg binary, usually in /opt/homebrew/bin or /usr/local/bin."
-        panel.canChooseDirectories = false
-        panel.showsHiddenFiles = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard FileManager.default.isExecutableFile(atPath: url.path) else {
-            notice = "The selected file is not executable. Select the ffmpeg binary."
-            return
-        }
-        useEngine(url)
     }
 
     func loadSourceSpecs() async {
         guard let job = selectedJob, let executable = ffmpegURL else { return }
+        defer { withExtendedLifetime(job.access) {} }
         if job.sourceSpecs != nil && job.specsEngine == executable { return }
         guard let index = jobs.firstIndex(where: { $0.id == job.id }) else { return }
         jobs[index].sourceSpecs = nil
@@ -189,6 +139,7 @@ final class ConverterModel: ObservableObject {
         var inserted: [VideoJob] = []
         var seen = Set<URL>()
         for url in urls {
+            let access = FileAccess(url)
             let canonical = url.standardizedFileURL
             guard seen.insert(canonical).inserted else { continue }
             if let existing = jobs.first(where: { $0.source.standardizedFileURL == canonical }) {
@@ -201,7 +152,7 @@ final class ConverterModel: ObservableObject {
                   !directory.boolValue, FileManager.default.isReadableFile(atPath: url.path) else {
                 rejected += 1; continue
             }
-            inserted.append(VideoJob(source: canonical))
+            inserted.append(VideoJob(source: canonical, access: access))
         }
         if !inserted.isEmpty {
             let movedIDs = Set(inserted.map(\.id))
@@ -242,17 +193,22 @@ final class ConverterModel: ObservableObject {
     func cancel() { stopRequested = true; engine?.cancel() }
 
     func start() {
-        guard !isConverting, !isDownloadingPack, !isInspecting, waitingCount > 0 else { return }
+        guard !isConverting, !isInspecting, waitingCount > 0 else { return }
         discoverFFmpeg()
-        guard let executable = ffmpegURL else { notice = "Install FFmpeg, then click Check again or choose its executable."; return }
+        guard let executable = ffmpegURL else { notice = "The bundled video engine is missing. Reinstall Media Coder."; return }
         guard let capabilities, format.isSupported(by: capabilities.encoders) else {
-            notice = "The selected engine cannot encode this format. Open Settings → Codecs to download or choose another engine."
+            notice = "The bundled engine cannot encode this format. Choose an available format."
             return
         }
         guard hasValidSize else {
             notice = "Enter a width and height between 2 and 16384 pixels."
             return
         }
+        if EngineLocation.isAppBundle && outputFolder == nil {
+            chooseOutputFolder()
+            guard outputFolder != nil else { return }
+        }
+        let selectedAccess = outputAccess
         let selectedDimensions = customDimensions
         let selectedFormat = format
         let selectedSize = size
@@ -265,7 +221,7 @@ final class ConverterModel: ObservableObject {
         isConverting = true
         stopRequested = false
         Task { [self] in
-            defer { isConverting = false; engine = nil }
+            defer { withExtendedLifetime(selectedAccess) {}; isConverting = false; engine = nil }
             for id in ids {
                 if stopRequested { break }
                 guard let index = jobs.firstIndex(where: { $0.id == id }) else { continue }

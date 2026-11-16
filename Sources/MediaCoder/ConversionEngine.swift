@@ -96,11 +96,15 @@ enum OutputFormat: String, CaseIterable, Identifiable {
     }
     var videoEncoderOptions: [String] { self == .av1 ? ["libaom-av1", "libsvtav1"] : [videoEncoder] }
     func isSupported(by encoders: Set<String>) -> Bool {
-        (isAudioOnly || videoEncoderOptions.contains(where: encoders.contains)) && encoders.contains(audioEncoder)
+        (isAudioOnly || videoEncoderOptions.contains(where: encoders.contains) || hardwareEncoder.map(encoders.contains) == true) && encoders.contains(audioEncoder)
+    }
+    func usesVideoToolbox(encoders: Set<String>?, hardwareAcceleration: Bool) -> Bool {
+        guard let hardwareEncoder else { return false }
+        return hardwareAcceleration || (encoders?.contains(hardwareEncoder) == true && !videoEncoderOptions.contains { encoders?.contains($0) == true })
     }
     func arguments(encoders: Set<String>? = nil, quality: VideoQuality = .balanced, hardwareAcceleration: Bool = false) -> [String] {
-        if hardwareAcceleration, let hardwareEncoder {
-            return ["-c:v", hardwareEncoder, "-allow_sw", "0", "-b:v", hardwareBitrate(quality: quality),
+        if usesVideoToolbox(encoders: encoders, hardwareAcceleration: hardwareAcceleration), let hardwareEncoder {
+            return ["-c:v", hardwareEncoder, "-allow_sw", hardwareAcceleration ? "0" : "1", "-require_sw", hardwareAcceleration ? "0" : "1", "-b:v", hardwareBitrate(quality: quality),
                     "-pix_fmt", "yuv420p", "-c:a", audioEncoder, "-b:a", "192k"]
                 + (self == .hevc ? ["-tag:v", "hvc1"] : [])
                 + (self == .mkv ? [] : ["-movflags", "+faststart"])
@@ -291,7 +295,7 @@ final class ConversionEngine: @unchecked Sendable {
     }
 }
 
-/// Uses the active FFmpeg engine so the portable pack does not need ffprobe.
+/// Uses the bundled FFmpeg engine without requiring a separate ffprobe executable.
 struct SourceSpecs: Sendable {
     let duration: String
     let bitrate: String
