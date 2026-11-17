@@ -16,9 +16,9 @@ make clean      # remove all local build artifacts
 make help       # grouped command reference
 ```
 
-`make setup` checks for full Xcode and installs XcodeGen via Homebrew if it is missing. Install Xcode and Homebrew first. FFmpeg is optional at build time and can be downloaded from the app.
+`make setup` checks for full Xcode and installs XcodeGen via Homebrew if it is missing. Install Xcode and Homebrew first. The first app build downloads pinned FFmpeg source and compiles a universal engine for Apple Silicon and Intel. Later builds reuse it. End users need no Homebrew, downloads, or separate engine installation.
 
-The Release app lives at `build/Build/Products/Release/MediaCoder.app`. For a Debug build, run the project in Xcode. Xcode automatically updates existing build products, so `make dev` does not delete them first. `make clean` removes `build/`, `.build/`, and local `DerivedData/`; it preserves source files, the project, preferences, and downloaded codec engines. Release builds are optimized local apps; signing/notarization for distribution is a separate step.
+The Release app lives at `build/Build/Products/Release/MediaCoder.app`. For a Debug build, run the project in Xcode. Xcode automatically updates existing build products, so `make dev` does not delete them first. `make clean` removes `build/`, `.build/`, and local `DerivedData/`; it preserves source files, the project, and preferences. Local builds are ad hoc signed and sandboxed; App Store distribution requires your Apple Developer signing identity.
 
 `make close` sends a termination signal to native app processes whose executable path exactly matches this project’s Debug or Release app. It does not close other checkouts or installed copies. `make open` (and therefore `make dev`) runs it before building, so finish any conversions before restarting.
 
@@ -26,38 +26,45 @@ For development, you can also open `MediaCoder.xcodeproj` in Xcode or use `swift
 
 ## Features
 
+- Drop files anywhere in the main window to append them. Drop on the upper or lower half of a sidebar row to insert before or after it; a line shows the destination. Drag sidebar items to reorder the queue, including during conversion.
 - Drop multiple videos or add them with the file picker (Command-O).
 - Input formats include MPG/MPEG, AVI, MOV, MP4, MKV, WMV, WebM, and more; codec support depends on your FFmpeg build. Any readable file can be added, avoiding an extension whitelist that would block obscure formats. FFmpeg validates its contents during conversion.
 - Video output presets: H.264 (MP4/MOV/MKV), HEVC and AV1 (MP4), ProRes (MOV), VP8/VP9 (WebM), FFV1 lossless encoding (MKV), MPEG-4 (AVI), MPEG-2 (MPG), Windows Media (WMV), Motion JPEG (MOV), HuffYUV (AVI), and Ut Video (AVI). AV1 automatically uses libaom or SVT-AV1 depending on the active engine. Only presets with the required encoders are shown. Resizing and pixel normalization can change pixels even when using a lossless encoder.
 - Extract the first audio track as M4A (AAC), MP3, WAV (PCM), FLAC, Apple Lossless (M4A), Opus, WavPack, AIFF, or AC-3. AC-3 exports stereo at 48 kHz; Opus uses 48 kHz. Choose an option under **Extract audio** in the format menu, then click **Extract audio**. Video size does not apply. Files are named `movie-audio.m4a` (with numeric suffixes to avoid overwriting); videos without audio show an error. WAV and FLAC do not restore quality lost in the source.
 - Keep original size or fit within 3840×2160 (4K UHD), 2560×1440 (2K/QHD), 1920×1080, 1280×720, or 854×480. Choose **Custom** to enter width and height bounds from 2 to 16384 pixels, preserving display aspect ratio without upscaling. Dimensions are rounded to even pixels for encoder compatibility. Anamorphic sources are normalized to square pixels.
 - Choose **Smaller file**, **Balanced** (default), or **High quality** for destination video. Quality adjusts compression for the selected codec; higher quality generally produces larger files and cannot restore detail absent from the source. FFV1 uses fixed lossless encoding, and audio extraction is unaffected.
-- Optional **Hardware acceleration** for H.264 (MP4/MOV/MKV) and HEVC (MP4) uses Apple VideoToolbox when present in the engine. Software encoding remains the default. Hardware quality levels target 4, 8, or 16 Mbit/s; actual size and quality depend on the source. Hardware failures show a retry suggestion with acceleration disabled. This accelerates encoding; decoding and resizing retain the existing path.
+- **Hardware acceleration** for H.264 (MP4/MOV/MKV) and HEVC (MP4) uses Apple VideoToolbox when present in the engine. Hardware acceleration is enabled by default for supported formats and engines; you can turn it off to use software encoding. Hardware quality levels target 4, 8, or 16 Mbit/s; actual size and quality depend on the source. Hardware failures show a retry suggestion with acceleration disabled. This accelerates encoding; decoding and resizing retain the existing path.
 - Source specs for the selected video: resolution, video codec, frame rate, duration, overall bitrate, first audio track details, and file size. Read locally using the active engine without converting the file.
 - A selectable video sidebar, progress, cancel, retry, error details, and reveal output in Finder. Conversion pauses after each video; click **Next video** to start the next waiting item. Selecting a ready item lets you convert it first.
-- Save beside originals or choose a folder. Outputs include the selected size, for example `movie-converted-720p.mp4` or `movie-converted-original.mp4`, with numeric suffixes when needed. The label describes the chosen size preset; smaller sources are never upscaled. Original files are preserved.
+- Choose an output folder to grant sandbox write access. Outputs include the selected size, for example `movie-converted-720p.mp4` or `movie-converted-original.mp4`, with numeric suffixes when needed. The label describes the chosen size preset; smaller sources are never upscaled. Original files are preserved.
 
-The app converts the first video stream and optional first audio stream. Subtitles and additional tracks are not included. It does not remove interlacing. This is a local development build, not a notarized distributable.
+The app converts the first video stream and optional first audio stream. Subtitles and additional tracks are not included. It does not remove interlacing. Local development builds are not App Store submissions.
 
-## Codec engines and downloads
+## Bundled transcoding engine
 
-Open **Settings → Codecs** (Command-comma) to see the active engine, browse/search its actual decoders and encoders, choose a custom FFmpeg executable, or download the portable codec pack. The app remains small because the engine is downloaded separately and reused offline. It does not download video files or upload media.
+The app includes FFmpeg 8.1.2 in `Contents/Helpers/ffmpeg`. It never downloads executable code, chooses an external engine, or uses Homebrew when running as an app bundle. Missing engines are a build/install error. **Settings → Codecs** shows the actual bundled codecs. Media stays on the Mac and conversion works offline.
 
-The portable pack is pinned to the [ffmpeg-static b6.1.1 release](https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1), with native Apple Silicon and Intel downloads (approximately 46 MB and 79 MB respectively). It uses SHA-256 digests pinned in `CodecSupport.swift`, checks HTTP responses, retains the upstream license/README, validates the executable, and moves the complete installation into a versioned folder under `~/Library/Application Support/MediaCoder/Engines/`. Downloads show progress and can be cancelled. Failed/cancelled installs clean up staging files and leave the current engine intact. Already-installed packs are reused.
+`scripts/build-engine.sh` downloads the official source archive, checks its pinned SHA-256, builds arm64 and x86_64, and combines them. It disables GPL/nonfree/version3 components, external library autodetection, networking, and capture devices. `scripts/verify-engine.sh` rejects non-system dynamic dependencies and GPL/nonfree/version3 build flags. Engine updates require changing the version and digest together, rebuilding, and testing.
 
-FFmpeg codecs are compiled into its engine rather than installed as individual plug-ins. The downloadable engine has a broad codec set, but this upstream release contains FFmpeg 6.0 on Apple Silicon and 6.1.1 on Intel, rather than the latest release, and does not promise every codec. A newer/custom engine may support more decoders or different encoders. The codec list reflects the selected engine, including audio and subtitle codecs; this app currently converts video and the first audio track only.
+H.264 and HEVC use Apple's VideoToolbox encoders. With hardware acceleration disabled, VideoToolbox requires Apple's software implementation; this can fail on Macs without a software encoder for the selected codec. This LGPL build does not include libx264, libx265, libvpx, libopus, libmp3lame, or AV1 encoders. Their presets are hidden when unavailable. Built-in ProRes, FFV1, MPEG-2, WMV, Motion JPEG, HuffYUV, Ut Video, AAC, PCM, FLAC, ALAC, WavPack, and AC-3 remain available. MPEG-4/AVI currently requires MP3 encoding and is hidden too.
 
-This machine also has a newer Homebrew engine installed. To install or expand a Homebrew engine yourself:
+The app bundles FFmpeg's license, notices, exact source archive, configure logs, and build recipe under `Contents/Resources/FFmpeg`. Review [FFmpeg's licensing guidance](https://ffmpeg.org/legal.html) for release obligations, including source access and distribution terms; this build configuration alone is not legal clearance or App Store approval. Source must remain available to recipients of each shipped version.
+
+## App Store preparation
+
+The app enables App Sandbox and user-selected read/write access. The engine is signed with only App Sandbox and sandbox inheritance entitlements. No network entitlement is requested. Source file security scopes stay open while queued; output requires a folder selected through the system picker. Access is session-only; queues and folder access are not persisted across launches.
+
+Apple permits [embedded helper tools in sandboxed apps](https://developer.apple.com/documentation/xcode/embedding-a-helper-tool-in-a-sandboxed-app) and requires [self-contained Mac App Store bundles](https://developer.apple.com/app-store/review/guidelines/#software-requirements). The engine is signed before Xcode signs the enclosing app.
+
+To prepare an archive with your own registered identity:
 
 ```sh
-brew install ffmpeg
-# Broader optional library set:
-brew install ffmpeg-full
+DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+PRODUCT_BUNDLE_IDENTIFIER=com.yourcompany.MediaCoder \
+./scripts/archive-app-store.sh
 ```
 
-Use **Choose engine…** to select that build. The app checks a saved selection, a bundled executable, Homebrew paths, and the downloaded pack. Downloading through the app selects the portable pack; an existing Homebrew installation is never changed by the app. A custom engine can always be selected again.
-
-FFmpeg is not bundled with the app. If distributing an engine or the app commercially, review the selected build's license and provide the required notices/source access. The portable pack's release and pinned digests must be updated together when upgrading.
+Open `build/MediaCoder.xcarchive` in Xcode Organizer to validate and distribute to App Store Connect. Before submission, set your real bundle identifier, version/build number and signing team, complete App Store metadata/privacy and license review, and test the distribution-signed app on both architectures. Test file picker and Finder drops, source inspection, selected output folders, cancellation/retry, and offline conversions on a Mac without Homebrew. Ad hoc local builds cannot establish that provisioning or App Store review will succeed.
 
 ## Build and verify
 
@@ -67,11 +74,12 @@ Requires full Xcode. `make setup` checks the build tools and installs XcodeGen i
 make build
 ./scripts/test-engine.sh
 ./scripts/test-queue.sh
-# Also test installation and every available preset with the portable pack:
-./scripts/test-engine.sh --download-pack
+./scripts/test-bundled.sh # signed sandbox parent + embedded helper, all available presets
+# Also exercise every available preset in the bundled engine:
+BUNDLED_FFMPEG="$PWD/build/engine/universal/ffmpeg" ./scripts/test-engine.sh
 ```
 
-The integration checks create temporary MPG and AVI fixtures and verify real conversions, resizing, silent video handling, malformed input cleanup, cancellation, and existing output protection. The test script currently expects Apple Silicon Homebrew paths.
+The integration checks create temporary MPG and AVI fixtures and verify real conversions, resizing, silent video handling, malformed input cleanup, cancellation, and existing output protection. The integration test fixture generator and independent ffprobe checks currently expect Apple Silicon Homebrew paths; the shipped app does not.
 
 ## App icon
 

@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:media-coder}",
+            "name": "Debug MediaCoder",
+            "target": "MediaCoder",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MediaCoder"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:media-coder}",
+            "name": "Release MediaCoder",
+            "target": "MediaCoder",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MediaCoder"
+        }
+    ]
+}

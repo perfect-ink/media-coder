@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: ConverterModel
@@ -66,7 +67,7 @@ struct ContentView: View {
                         Picker("Output quality", selection: $model.quality) {
                             ForEach(VideoQuality.allCases) { Text($0.rawValue).tag($0) }
                         }.labelsHidden().frame(width: 170)
-                        Text(model.usesHardwareAcceleration ? "Target video bitrate: \(model.format.hardwareBitrate(quality: model.quality))bit/s" : model.quality.description).font(.caption).foregroundStyle(.secondary)
+                        Text(model.format.usesVideoToolbox(encoders: model.capabilities?.encoders, hardwareAcceleration: model.usesHardwareAcceleration) ? "Target video bitrate: \(model.format.hardwareBitrate(quality: model.quality))bit/s" : model.quality.description).font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text("Lossless encoding · resizing can still change pixels.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -81,7 +82,7 @@ struct ContentView: View {
                         .toggleStyle(.checkbox)
                         .disabled(model.isConverting || !model.canUseHardwareAcceleration)
                     Text(model.canUseHardwareAcceleration
-                         ? (model.usesHardwareAcceleration ? "Apple VideoToolbox encoding" : "Software encoding")
+                         ? (model.usesHardwareAcceleration ? "Apple VideoToolbox encoding" : "Software encoding when available")
                          : "Unavailable in the selected engine")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
@@ -90,9 +91,9 @@ struct ContentView: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "folder").foregroundStyle(.secondary)
-                Text(model.outputFolder?.path ?? "Save alongside original videos")
+                Text(model.outputFolder?.path ?? "Choose an output folder")
                     .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
-                    .help(model.outputFolder?.path ?? "Output files are saved in the same folder as each original.")
+                    .help(model.outputFolder?.path ?? "Choose a folder to allow Media Coder to save converted files.")
                 Spacer()
                 if model.outputFolder != nil {
                     Button("Reset") { model.outputFolder = nil }.buttonStyle(.link)
@@ -111,7 +112,7 @@ struct ContentView: View {
                         Label(model.selectedJob?.status == .done && model.waitingCount > 0 ? "Next video" : (model.format.isAudioOnly ? "Extract audio" : "Convert video"), systemImage: model.selectedJob?.status == .done ? "arrow.right" : "arrow.triangle.2.circlepath")
                             .padding(.horizontal, 12).padding(.vertical, 5)
                     }.buttonStyle(.borderedProminent)
-                        .disabled(!model.hasValidSize || model.waitingCount == 0 || model.ffmpegURL == nil || model.isInspecting || model.capabilities == nil || model.availableFormats.isEmpty || model.isDownloadingPack)
+                        .disabled(!model.hasValidSize || model.waitingCount == 0 || model.ffmpegURL == nil || model.isInspecting || model.capabilities == nil || model.availableFormats.isEmpty)
                 }
             }
 
@@ -132,6 +133,11 @@ struct ContentView: View {
         }
             .padding(28)
         }.background(Color(nsColor: .windowBackgroundColor)).tint(accent)
+        .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            model.add(urls)
+            return !urls.isEmpty
+        } isTargeted: { isTargeted = $0 }
         .alert("Media Coder", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK") { model.notice = nil }
         } message: { Text(model.notice ?? "") }
@@ -150,21 +156,16 @@ struct ContentView: View {
 
     private var setupBanner: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Label("FFmpeg is needed to convert videos", systemImage: "wrench.and.screwdriver").fontWeight(.medium)
-            Text("Download the codec engine once, then convert offline.").font(.system(size: 12))
-            HStack {
-                SettingsLink { Text("Download codecs…") }
-                Spacer()
-                Button("Choose executable…") { model.chooseFFmpeg() }
-                Button("Check again") { model.discoverFFmpeg() }
-            }.font(.system(size: 12))
+            Label("The bundled video engine is missing", systemImage: "wrench.and.screwdriver").fontWeight(.medium)
+            Text("Reinstall Media Coder to restore its video engine.").font(.system(size: 12))
+            Button("Check again") { model.discoverFFmpeg() }
         }.padding(14).background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var dropArea: some View {
         VStack(spacing: 8) {
             FilmIconArtwork(size: 42)
-            Text("Drop videos here").font(.system(size: 14, weight: .semibold))
+            Text("Drop videos anywhere").font(.system(size: 14, weight: .semibold))
             Text("MPG, AVI, MOV, MP4, and more").font(.caption2).foregroundStyle(.secondary)
             Button("Browse files…") { model.chooseFiles() }.buttonStyle(.link).font(.caption)
         }
@@ -189,6 +190,7 @@ struct ContentView: View {
                     ScrollView {
                         LazyVStack(spacing: 6) {
                             ForEach(model.jobs) { job in
+                                QueueDropRow(model: model, jobID: job.id, accent: accent) {
                                 Button { model.selectedJobID = job.id } label: {
                                     HStack(spacing: 9) {
                                         FilmIconArtwork(size: 30)
@@ -204,7 +206,14 @@ struct ContentView: View {
                                     }.padding(11).frame(maxWidth: .infinity, alignment: .leading)
                                         .background(model.selectedJobID == job.id ? accent.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
                                         .contentShape(Rectangle())
-                                }.buttonStyle(.plain).id(job.id).help(job.source.path)
+                                }.buttonStyle(.plain).help(job.source.path)
+                                    .draggable(job.source)
+                                }.id(job.id)
+                            }
+                            QueueDropRow(model: model, jobID: nil, accent: accent) {
+                                Text("Drop here to add to the end")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, minHeight: 40)
                             }
                         }.padding(.horizontal, 8)
                     }
@@ -218,7 +227,7 @@ struct ContentView: View {
             }
         }.frame(width: 250).background(Color(nsColor: .underPageBackgroundColor))
         .dropDestination(for: URL.self) { urls, _ in
-            model.add(urls)
+            model.place(urls, before: nil)
             return !urls.isEmpty
         } isTargeted: { isTargeted = $0 }
     }
@@ -241,7 +250,7 @@ struct ContentView: View {
                 Text(error).font(.caption).foregroundStyle(.secondary)
                 Button("Retry reading specs") { Task { await model.loadSourceSpecs() } }
             } else if model.ffmpegURL == nil {
-                Text("Choose or download an engine to read source specs.").font(.caption).foregroundStyle(.secondary)
+                Text("The bundled engine is unavailable. Reinstall Media Coder to read source specs.").font(.caption).foregroundStyle(.secondary)
             } else {
                 ProgressView("Reading source specs…").controlSize(.small)
             }
@@ -297,5 +306,68 @@ struct ContentView: View {
                 Text("Add a few videos to get started.").font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Row halves act as before/after insertion targets for both Finder and queue drags.
+private struct QueueDropRow<Content: View>: View {
+    @ObservedObject var model: ConverterModel
+    let jobID: UUID?
+    let accent: Color
+    @ViewBuilder let content: () -> Content
+    @State private var height: CGFloat = 60
+    @State private var targeted = false
+    @State private var insertAfter = false
+
+    var body: some View {
+        content()
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .background(GeometryReader { geometry in
+                Color.clear.onChange(of: geometry.size.height, initial: true) { _, value in height = value }
+            })
+            .overlay(alignment: insertAfter ? .bottom : .top) {
+                if targeted { Rectangle().fill(accent).frame(height: 3).allowsHitTesting(false) }
+            }
+            .onDrop(of: [.fileURL], delegate: QueueInsertionDrop(
+                model: model, jobID: jobID, height: height,
+                targeted: $targeted, insertAfter: $insertAfter))
+    }
+}
+
+private struct QueueInsertionDrop: DropDelegate {
+    let model: ConverterModel
+    let jobID: UUID?
+    let height: CGFloat
+    @Binding var targeted: Bool
+    @Binding var insertAfter: Bool
+
+    func dropEntered(info: DropInfo) { targeted = true; insertAfter = jobID != nil && info.location.y > height / 2 }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        insertAfter = jobID != nil && info.location.y > height / 2
+        return DropProposal(operation: .copy)
+    }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        let after = jobID != nil && info.location.y > height / 2
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        Task { @MainActor in
+            let destination: UUID?
+            if after, let index = model.jobs.firstIndex(where: { $0.id == jobID }) {
+                destination = model.jobs.dropFirst(index + 1).first?.id
+            } else { destination = jobID }
+            var urls: [URL] = []
+            // Preserve the order of a multi-file drop despite asynchronous provider loads.
+            for provider in providers {
+                let url: URL? = await withCheckedContinuation { continuation in
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+                }
+                if let url { urls.append(url) }
+            }
+            model.place(urls, before: destination)
+        }
+        return true
     }
 }

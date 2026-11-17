@@ -7,5 +7,5 @@ case "$configuration" in
     *) print -u2 "Usage: $0 [Debug|Release]"; exit 2 ;;
 esac
 xcodegen generate
-xcodebuild -project MediaCoder.xcodeproj -scheme MediaCoder -configuration "$configuration" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project MediaCoder.xcodeproj -scheme MediaCoder -configuration "$configuration" -derivedDataPath build CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
 printf '\nApp: %s/build/Build/Products/%s/MediaCoder.app\n' "$PWD" "$configuration"

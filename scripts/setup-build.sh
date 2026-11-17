@@ -14,4 +14,4 @@ if ! command -v xcodegen >/dev/null 2>&1; then
     brew install xcodegen
 fi
 
-print 'Build tools ready. FFmpeg can be downloaded from the app when needed.'
+print 'Build tools ready. The first app build compiles its bundled FFmpeg engine from source.'
