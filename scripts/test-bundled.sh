@@ -7,7 +7,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.local.MediaCoder.BundledIntegration</string>
+<key>CFBundleIdentifier</key><string>org.perfectink.mediacoder.BundledIntegration</string>
 <key>CFBundleExecutable</key><string>BundledIntegration</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
@@ -18,7 +18,7 @@ PLIST
 swiftc -parse-as-library Sources/MediaCoder/ConversionEngine.swift Sources/MediaCoder/CodecSupport.swift \
     Tests/BundledIntegration.swift -o "$app/Contents/MacOS/BundledIntegration"
 cp build/engine/universal/ffmpeg "$app/Contents/Helpers/ffmpeg"
-codesign --force --sign - --identifier com.local.MediaCoder.BundledIntegration.ffmpeg \
+codesign --force --sign - --identifier org.perfectink.mediacoder.BundledIntegration.ffmpeg \
     --options runtime --entitlements Configuration/Engine.entitlements "$app/Contents/Helpers/ffmpeg"
 codesign --force --sign - --options runtime --entitlements Configuration/MediaCoder.entitlements "$app"
 codesign --verify --deep --strict "$app"
