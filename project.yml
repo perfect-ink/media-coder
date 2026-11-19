@@ -1,6 +1,6 @@
 name: MediaCoder
 options:
-  bundleIdPrefix: com.local
+  bundleIdPrefix: org.perfectink
   deploymentTarget:
     macOS: '14.0'
 targets:
@@ -10,7 +10,7 @@ targets:
     sources: [Sources/MediaCoder]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.local.MediaCoder
+        PRODUCT_BUNDLE_IDENTIFIER: org.perfectink.mediacoder
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
